@@ -1,6 +1,13 @@
-from openai import OpenAI
 import random
+import requests  
 VALID_MEAL_TYPES = {"breakfast", "lunch", "dinner"}
+# Add Grok API configuration
+GROK_API_URL = "https://api.x.ai/v1/chat/completions"
+GROK_API_KEY = "xai-YO5gjtorWRnzjcT7dO8Nvk6IcvgpZt9nAnTjsMPKlVIIkGsChcLO7NshKwC18VkRR7D049lNgE1uw0Ow"  # Replace with your actual API key
+HEADERS = {
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {GROK_API_KEY}"
+}
 
 def get_recipe_input():
     """Get food names from user input, one per line."""
@@ -27,8 +34,6 @@ def get_recipe_input():
 
 def predict_ingredients(food_name):
     """Predict ingredients using LLM."""
-    client = OpenAI()
-    
     prompt = f"""
     Given a recipe for '{food_name}' ,
     list the main ingredients that would typically be used.
@@ -38,16 +43,21 @@ def predict_ingredients(food_name):
     """
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a professional chef listing recipe ingredients."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=100
+        response = requests.post(
+            GROK_API_URL,
+            headers=HEADERS,
+            json={
+                "messages": [
+                    {"role": "system", "content": "You are a professional chef listing recipe ingredients."},
+                    {"role": "user", "content": prompt}
+                ],
+                "model": "grok-beta",
+                "temperature": 0.7,
+                "stream": False
+            }
         )
-        ingredients_text = response.choices[0].message.content.strip()
+        response_json = response.json()
+        ingredients_text = response_json['choices'][0]['message']['content'].strip()
         return [ing.strip() for ing in ingredients_text.split(',')]
     except Exception as e:
         return []  # Fallback empty list
@@ -73,124 +83,249 @@ def generate_recipe_details(food_name):
     }
 
 def predict_meal_type(food_name):
-    client = OpenAI()
     prompt = f"""Given the dish '{food_name}', classify it into one of these categories:
     - Breakfast
     - Lunch
     - Dinner
-    - Dessert
-    - Snack
     Return only the category name, no additional text."""
     
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
+    response = requests.post(
+        GROK_API_URL,
+        headers=HEADERS,
+        json={
+            "messages": [{"role": "user", "content": prompt}],
+            "model": "grok-beta",
+            "stream": False
+        }
     )
     
-    return response.choices[0].message.content.strip()
+    response_json = response.json()
+    return response_json['choices'][0]['message']['content'].strip()
 
 def predict_cooking_time(food_name):
-    client = OpenAI()
     prompt = f"""Given the dish '{food_name}', provide the estimated cooking time in minutes.
     Return only the number, no additional text."""
     
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
+    response = requests.post(
+        GROK_API_URL,
+        headers=HEADERS,
+        json={
+            "messages": [{"role": "user", "content": prompt}],
+            "model": "grok-beta",
+            "stream": False
+        }
     )
     
-    return int(response.choices[0].message.content.strip())
+    response_json = response.json()
+    return int(response_json['choices'][0]['message']['content'].strip())
 
 def predict_description(food_name):
-    client = OpenAI()
     prompt = f"""Given the food name '{food_name}', provide a brief but appetizing description 
     of this dish in 2-3 sentences. Focus on its taste, texture, and what makes it special."""
     
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
+    response = requests.post(
+        GROK_API_URL,
+        headers=HEADERS,
+        json={
+            "messages": [{"role": "user", "content": prompt}],
+            "model": "grok-beta",
+            "stream": False
+        }
     )
     
-    return response.choices[0].message.content.strip()
+    response_json = response.json()
+    return response_json['choices'][0]['message']['content'].strip()
 
 
-def get_random_dinner_recipe(recipes):
-    # Get the total number of recipes
-    total_recipes = len(recipes)
+def get_random_dinner_recipe(recipes, planning_days=1, current_day=1, used_dinners=None):
+    # Initialize used_dinners set if None
+    if used_dinners is None:
+        used_dinners = set()
     
-    # If no recipes exist, return None
-    if total_recipes == 0:
-        return None, False, None
+    # If no recipes exist or all recipes have been used, return None
+    available_recipes = {name: details for name, details in recipes.items() 
+                        if name not in used_dinners}
+    if not available_recipes:
+        print("\nWarning: No more unique recipes available. Some meals will be repeated.")
+        # Reset available recipes if we run out
+        available_recipes = recipes
+        used_dinners.clear()
     
-    # Generate a random number between 1 and total recipes
-    random_number = random.randint(1, total_recipes)
+    # Create a list of available recipes with their details
+    recipe_list = "\n".join([
+        f"- {name}: {details['description']} (Ingredients: {', '.join(details['main_ingredients'])})"
+        for name, details in available_recipes.items()
+    ])
     
-    # Find the recipe with the matching number
-    selected_recipe = None
-    recipe_name = None
+    prompt = f"""Given these recipes:
+    {recipe_list}
     
-    for name, recipe in recipes.items():
-        if recipe['number'] == random_number:
-            selected_recipe = recipe
-            recipe_name = name
-            break
+    Select the most nutritionally appropriate dinner option for day {current_day}, 
+    considering meal planning for the next {planning_days} days. Consider:
+    1. Balance of proteins, carbs, and vegetables
+    2. Variety and nutrition across the {planning_days} day period
+    3. Seasonal appropriateness and meal complexity
+    4. How this meal might complement other meals in a {planning_days}-day rotation
     
-    # Check if the recipe is labeled as dinner
+    Return only the exact name of the chosen recipe, no additional text."""
+    
+    try:
+        response = requests.post(
+            GROK_API_URL,
+            headers=HEADERS,
+            json={
+                "messages": [
+                    {"role": "system", "content": "You are a nutritionist creating varied, balanced meal plans."},
+                    {"role": "user", "content": prompt}
+                ],
+                "model": "grok-beta",
+                "temperature": 0.7,
+                "stream": False
+            }
+        )
+        
+        response_json = response.json()
+        selected_name = response_json['choices'][0]['message']['content'].strip()
+        if selected_name in available_recipes:
+            selected_recipe = available_recipes[selected_name]
+            is_dinner = 'dinner' in selected_recipe.get('meal_type', '').lower()
+            used_dinners.add(selected_name)
+            return selected_name, is_dinner, selected_recipe
+            
+    except Exception as e:
+        print(f"Warning: AI selection failed, falling back to random selection")
+    
+    # Fallback to random selection if AI selection fails
+    random_name = random.choice(list(available_recipes.keys()))
+    selected_recipe = available_recipes[random_name]
     is_dinner = 'dinner' in selected_recipe.get('meal_type', '').lower()
+    used_dinners.add(random_name)
     
-    return recipe_name, is_dinner, selected_recipe
+    return random_name, is_dinner, selected_recipe
 
-def get_random_lunch_recipe(recipes):
-    # Get the total number of recipes
-    total_recipes = len(recipes)
+def get_random_lunch_recipe(recipes, planning_days=1, current_day=1, used_lunches=None):
+    # Initialize used_lunches set if None
+    if used_lunches is None:
+        used_lunches = set()
     
-    # If no recipes exist, return None
-    if total_recipes == 0:
-        return None, False, None
+    available_recipes = {name: details for name, details in recipes.items() 
+                        if name not in used_lunches}
+    if not available_recipes:
+        print("\nWarning: No more unique lunch recipes available. Some meals will be repeated.")
+        available_recipes = recipes
+        used_lunches.clear()
     
-    # Generate a random number between 1 and total recipes
-    random_number = random.randint(1, total_recipes)
+    recipe_list = "\n".join([
+        f"- {name}: {details['description']} (Ingredients: {', '.join(details['main_ingredients'])})"
+        for name, details in available_recipes.items()
+    ])
     
-    # Find the recipe with the matching number
-    selected_recipe = None
-    recipe_name = None
+    prompt = f"""Given these recipes:
+    {recipe_list}
     
-    for name, recipe in recipes.items():
-        if recipe['number'] == random_number:
-            selected_recipe = recipe
-            recipe_name = name
-            break
+    Select the most appropriate lunch option for day {current_day}, 
+    considering meal planning for the next {planning_days} days. Consider:
+    1. Balance of proteins, carbs, and vegetables
+    2. Energy levels needed for afternoon activities
+    3. Variety across the {planning_days} day period
+    4. Portability and suitability for midday meals
     
-    # Check if the recipe is labeled as lunch
+    Return only the exact name of the chosen recipe, no additional text."""
+    
+    try:
+        response = requests.post(
+            GROK_API_URL,
+            headers=HEADERS,
+            json={
+                "messages": [
+                    {"role": "system", "content": "You are a nutritionist creating varied, balanced lunch plans."},
+                    {"role": "user", "content": prompt}
+                ],
+                "model": "grok-beta",
+                "temperature": 0.7,
+                "stream": False
+            }
+        )
+        
+        response_json = response.json()
+        selected_name = response_json['choices'][0]['message']['content'].strip()
+        if selected_name in available_recipes:
+            selected_recipe = available_recipes[selected_name]
+            is_lunch = 'lunch' in selected_recipe.get('meal_type', '').lower()
+            used_lunches.add(selected_name)
+            return selected_name, is_lunch, selected_recipe
+            
+    except Exception as e:
+        print(f"Warning: AI selection failed, falling back to random selection")
+    
+    random_name = random.choice(list(available_recipes.keys()))
+    selected_recipe = available_recipes[random_name]
     is_lunch = 'lunch' in selected_recipe.get('meal_type', '').lower()
+    used_lunches.add(random_name)
     
-    return recipe_name, is_lunch, selected_recipe
+    return random_name, is_lunch, selected_recipe
 
-def get_random_breakfast_recipe(recipes):
-    # Get the total number of recipes
-    total_recipes = len(recipes)
+def get_random_breakfast_recipe(recipes, planning_days=1, current_day=1, used_breakfasts=None):
+    # Initialize used_breakfasts set if None
+    if used_breakfasts is None:
+        used_breakfasts = set()
     
-    # If no recipes exist, return None
-    if total_recipes == 0:
-        return None, False, None
+    available_recipes = {name: details for name, details in recipes.items() 
+                        if name not in used_breakfasts}
+    if not available_recipes:
+        print("\nWarning: No more unique breakfast recipes available. Some meals will be repeated.")
+        available_recipes = recipes
+        used_breakfasts.clear()
     
-    # Generate a random number between 1 and total recipes
-    random_number = random.randint(1, total_recipes)
+    recipe_list = "\n".join([
+        f"- {name}: {details['description']} (Ingredients: {', '.join(details['main_ingredients'])})"
+        for name, details in available_recipes.items()
+    ])
     
-    # Find the recipe with the matching number
-    selected_recipe = None
-    recipe_name = None
+    prompt = f"""Given these recipes:
+    {recipe_list}
     
-    for name, recipe in recipes.items():
-        if recipe['number'] == random_number:
-            selected_recipe = recipe
-            recipe_name = name
-            break
+    Select the most appropriate breakfast option for day {current_day}, 
+    considering meal planning for the next {planning_days} days. Consider:
+    1. Balance of proteins, carbs, and healthy fats
+    2. Energy levels needed for the start of the day
+    3. Variety across the {planning_days} day period
+    4. Preparation time suitable for morning routines
     
-    # Check if the recipe is labeled as breakfast
+    Return only the exact name of the chosen recipe, no additional text."""
+    
+    try:
+        response = requests.post(
+            GROK_API_URL,
+            headers=HEADERS,
+            json={
+                "messages": [
+                    {"role": "system", "content": "You are a nutritionist creating varied, balanced breakfast plans."},
+                    {"role": "user", "content": prompt}
+                ],
+                "model": "grok-beta",
+                "temperature": 0.7,
+                "stream": False
+            }
+        )
+        
+        response_json = response.json()
+        selected_name = response_json['choices'][0]['message']['content'].strip()
+        if selected_name in available_recipes:
+            selected_recipe = available_recipes[selected_name]
+            is_breakfast = 'breakfast' in selected_recipe.get('meal_type', '').lower()
+            used_breakfasts.add(selected_name)
+            return selected_name, is_breakfast, selected_recipe
+            
+    except Exception as e:
+        print(f"Warning: AI selection failed, falling back to random selection")
+    
+    random_name = random.choice(list(available_recipes.keys()))
+    selected_recipe = available_recipes[random_name]
     is_breakfast = 'breakfast' in selected_recipe.get('meal_type', '').lower()
+    used_breakfasts.add(random_name)
     
-    return recipe_name, is_breakfast, selected_recipe
+    return random_name, is_breakfast, selected_recipe
 
 def display_meal_plan(recipe_name, meal_type, recipe):
     """Helper function to display a meal in a formatted way"""
@@ -219,6 +354,21 @@ def main():
         try:
             days = int(input("\nHow many days of meal plans would you like to create? "))
             if days > 0:
+                if days > len(recipes):
+                    print(f"\nWarning: You've requested {days} days of meals but only provided {len(recipes)} recipes.")
+                    print("This will result in repeated meals. Continue anyway? (y/n)")
+                    if input().lower() != 'y':
+                        continue
+                break
+            print("Please enter a positive number.")
+        except ValueError:
+            print("Please enter a valid number.")
+    
+    # Get number of planning days for AI
+    while True:
+        try:
+            planning_days = int(input("\nHow many future days should the AI consider when planning meals? "))
+            if planning_days > 0:
                 break
             print("Please enter a positive number.")
         except ValueError:
@@ -242,21 +392,41 @@ def main():
     
     print("\n=== Your Meal Plan ===")
     
+    # Initialize tracking sets for used meals
+    used_breakfasts = set()
+    used_lunches = set()
+    used_dinners = set()
+    
     # Generate meal plan for each day
     for day in range(1, days + 1):
         print(f"\nDay {day}:")
         print("-" * 20)
         
         if meal_choice in [1, 2]:  # All meals or Breakfast only
-            recipe_name, is_breakfast, recipe = get_random_breakfast_recipe(recipes)
+            recipe_name, is_breakfast, recipe = get_random_breakfast_recipe(
+                recipes, 
+                planning_days=planning_days, 
+                current_day=day, 
+                used_breakfasts=used_breakfasts
+            )
             display_meal_plan(recipe_name, "Breakfast", recipe)
         
         if meal_choice in [1, 3]:  # All meals or Lunch only
-            recipe_name, is_lunch, recipe = get_random_lunch_recipe(recipes)
+            recipe_name, is_lunch, recipe = get_random_lunch_recipe(
+                recipes, 
+                planning_days=planning_days, 
+                current_day=day, 
+                used_lunches=used_lunches
+            )
             display_meal_plan(recipe_name, "Lunch", recipe)
         
         if meal_choice in [1, 4]:  # All meals or Dinner only
-            recipe_name, is_dinner, recipe = get_random_dinner_recipe(recipes)
+            recipe_name, is_dinner, recipe = get_random_dinner_recipe(
+                recipes, 
+                planning_days=planning_days, 
+                current_day=day, 
+                used_dinners=used_dinners
+            )
             display_meal_plan(recipe_name, "Dinner", recipe)
 
 if __name__ == "__main__":
