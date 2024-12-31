@@ -10,28 +10,36 @@ HEADERS = {
 }
 
 def get_recipe_input():
-    """Get food names from user input, one per line."""
+    """Get food names from user input, supporting multiple input formats."""
     print("\n=== Recipe Generator ===")
     print("Enter the names of foods you'd like recipes for")
-    print("Example: Pancakes")
-    print("Enter one food per line. Press Enter twice to finish.")
+    print("Example: Pancakes, Spaghetti Carbonara, Chicken Curry")
+    print("You can separate foods with commas, spaces, or new lines")
+    print("Press Enter twice to finish.")
     
-    recipes_input = {}  # Changed to dictionary
+    recipes_input = {}  # Dictionary for recipes
     recipe_number = 1   # Initialize recipe counter
+    current_input = []  # Collect all input lines
     
     while True:
         line = input().strip()
         if not line:  # Empty line indicates finish
             break
-            
-        # Use generate_recipe_details to get recipe information
-        recipe_details = generate_recipe_details(line)
+        # Split each line by commas first
+        items = [item.strip() for item in line.split(',')]
+        current_input.extend(items)
+    
+    # Remove empty strings and duplicates while preserving order
+    food_items = list(dict.fromkeys(item for item in current_input if item))
+    
+    # Process each food item
+    for food in food_items:
+        recipe_details = generate_recipe_details(food)
         recipe_details['number'] = recipe_number
-        recipes_input[line] = recipe_details
+        recipes_input[food] = recipe_details
         recipe_number += 1
     
     return recipes_input
-
 def predict_ingredients(food_name):
     """Predict ingredients using LLM."""
     prompt = f"""
@@ -106,19 +114,30 @@ def predict_cooking_time(food_name):
     prompt = f"""Given the dish '{food_name}', provide the estimated cooking time in minutes.
     Return only the number, no additional text."""
     
-    response = requests.post(
-        GROK_API_URL,
-        headers=HEADERS,
-        json={
-            "messages": [{"role": "user", "content": prompt}],
-            "model": "grok-beta",
-            "stream": False
-        }
-    )
-    
-    response_json = response.json()
-    return int(response_json['choices'][0]['message']['content'].strip())
-
+    try:
+        response = requests.post(
+            GROK_API_URL,
+            headers=HEADERS,
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "model": "grok-beta",
+                "stream": False
+            }
+        )
+        
+        response_json = response.json()
+        print(f"Debug - API Response: {response_json}")  # Add this line to see the actual response
+        
+        # Add more robust response handling
+        if 'choices' in response_json:
+            return int(response_json['choices'][0]['message']['content'].strip())
+        else:
+            print(f"Unexpected API response format: {response_json}")
+            return 30  # Default cooking time in minutes
+            
+    except Exception as e:
+        print(f"Error in predict_cooking_time: {str(e)}")
+        return 30  # Default cooking time in minutes
 def predict_description(food_name):
     prompt = f"""Given the food name '{food_name}', provide a brief but appetizing description 
     of this dish in 2-3 sentences. Focus on its taste, texture, and what makes it special."""
